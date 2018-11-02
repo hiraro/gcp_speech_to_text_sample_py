@@ -27,7 +27,7 @@ Copy `.env.sample` as `.env`
 cp .env.sample .env
 ```
 
-Finally, copy your GOOGLE_APPLICATION_CREDENTIALS file as `google_cloud_speech_service_account.json` into cloned directory.
+Finally, copy your [GOOGLE_APPLICATION_CREDENTIALS](https://cloud.google.com/speech-to-text/docs/quickstart-client-libraries) file as `google_cloud_speech_service_account.json` into cloned directory.
 
 ```
 ls -la gcp_speech_to_text_sample_py
