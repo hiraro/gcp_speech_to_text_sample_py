@@ -2,6 +2,7 @@
 # coding: UTF-8
 import io
 import sys
+import time
 import logging
 import logzero
 from logzero import logger
@@ -23,6 +24,9 @@ def execute(task_queue):
         logger.debug("dequeued: {} {}".format(segment_info[0], segment_info[2]))
 
         transcribe_streaming(segment_info[2])
+
+        time.sleep(1)
+
 
 def transcribe_streaming(stream_file):
     """Streams transcription of the given audio file."""
