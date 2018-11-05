@@ -21,7 +21,8 @@ def execute(task_queue):
 
     while True:
         segment_info = task_queue.get()
-        logger.debug("dequeued: {} {}".format(segment_info[0], segment_info[2]))
+        logger.debug("dequeued: {} {}".format(
+            segment_info[0], segment_info[2]))
 
         transcribe_streaming(segment_info[2])
 
@@ -47,9 +48,13 @@ def transcribe_streaming(stream_file):
 
     config = types.RecognitionConfig(
         encoding=enums.RecognitionConfig.AudioEncoding.LINEAR16,
+        profanity_filter=True,
         sample_rate_hertz=Settings.SAMPLING_RATE,
+        max_alternatives=Settings.STT_MAX_ALTERNATIVES,
+        enable_word_time_offsets=Settings.STT_ENABLE_WORD_TIME_OFFSETS,
         language_code=Settings.STT_LANGUAGE_CODE)
     streaming_config = types.StreamingRecognitionConfig(
+        interim_results=Settings.STT_INTERIM_RESULTS,
         config=config)
 
     # streaming_recognize returns a generator.
@@ -68,6 +73,14 @@ def transcribe_streaming(stream_file):
             for alternative in alternatives:
                 logger.info('Confidence: {}'.format(alternative.confidence))
                 logger.info(u'Transcript: {}'.format(alternative.transcript))
+                for word_info in alternative.words:
+                    word = word_info.word
+                    start_time = word_info.start_time
+                    end_time = word_info.end_time
+                    logger.info('Word: {}, start_time: {}, end_time: {}'.format(
+                        word,
+                        start_time.seconds + start_time.nanos * 1e-9,
+                        end_time.seconds + end_time.nanos * 1e-9))
 
 
 if __name__ == '__main__':

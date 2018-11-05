@@ -22,11 +22,11 @@ from Frame import Frame
 logzero.loglevel(getattr(logging, Settings.LOG_LEVEL))
 
 
-def __frame_generator():
+def __frame_generator(input_stream):
     current_timestamp = 0.0
 
-    while not sys.stdin.buffer.closed:
-        byte_data = sys.stdin.buffer.read(Settings.VAD_FRAME_SIZE_BYTE)
+    while not input_stream.closed:
+        byte_data = input_stream.read(Settings.VAD_FRAME_SIZE_BYTE)
 
         frame = Frame(byte_data, current_timestamp,
                       Settings.VAD_FRAME_DURATION_MS)
@@ -35,10 +35,7 @@ def __frame_generator():
         current_timestamp += Settings.VAD_FRAME_DURATION_MS
 
 
-def __vad_collector(frames,
-                    sampling_rate=Settings.SAMPLING_RATE,
-                    frame_duration_ms=Settings.VAD_FRAME_DURATION_MS,
-                    padding_duration_ms=Settings.VAD_PADDING_DURATION_MS):
+def __vad_segment_collector(frames):
     """Filters out non-voiced audio frames.
 
     Given a source of audio frames, yields only
@@ -55,11 +52,7 @@ def __vad_collector(frames,
     voiced frames.
 
     Arguments:
-
     frames - a source of audio frames (sequence or generator).
-    sampling_rate - The audio sample rate, in Hz.
-    frame_duration_ms - The frame duration in milliseconds.
-    padding_duration_ms - The amount to pad the window, in milliseconds.
 
     Returns: A generator that yields PCM audio data.
     """
@@ -75,7 +68,8 @@ def __vad_collector(frames,
     vad = webrtcvad.Vad()
     vad.set_mode(Settings.VAD_MODE)
 
-    num_padding_frames = int(padding_duration_ms / frame_duration_ms)
+    num_padding_frames = int(Settings.VAD_PADDING_DURATION_MS /
+                             Settings.VAD_FRAME_DURATION_MS)
 
     # We use a deque for our sliding window/ring buffer.
     ring_buffer = collections.deque(maxlen=num_padding_frames)
@@ -86,16 +80,16 @@ def __vad_collector(frames,
 
     voiced_frames = []
     for frame in frames:
-        is_speech = vad.is_speech(frame.bytes, sampling_rate)
+        is_speech = vad.is_speech(frame.bytes, Settings.SAMPLING_RATE)
 
         if not triggered:
             ring_buffer.append((frame, is_speech))
             num_voiced = len([f for f, speech in ring_buffer if speech])
 
-            # If we're NOTTRIGGERED and more than 90% of the frames in
+            # If we're NOTTRIGGERED and more than Settings.VAD_VOICED_TRIGGER_RATE of the frames in
             # the ring buffer are voiced frames, then enter the
             # TRIGGERED state.
-            if num_voiced > 0.9 * ring_buffer.maxlen:
+            if num_voiced > Settings.VAD_VOICED_TRIGGER_RATE * ring_buffer.maxlen:
                 triggered = True
                 logger.info('+(%s)' % (ring_buffer[0][0].timestamp,))
 
@@ -113,10 +107,10 @@ def __vad_collector(frames,
             ring_buffer.append((frame, is_speech))
             num_unvoiced = len([f for f, speech in ring_buffer if not speech])
 
-            # If more than 90% of the frames in the ring buffer are
+            # If more than Settings.VAD_UNVOICED_TRIGGER_RATE of the frames in the ring buffer are
             # unvoiced, then enter NOTTRIGGERED and yield whatever
             # audio we've collected.
-            if num_unvoiced > 0.9 * ring_buffer.maxlen:
+            if num_unvoiced > Settings.VAD_UNVOICED_TRIGGER_RATE * ring_buffer.maxlen:
                 logger.info('-(%s)' % (frame.timestamp + frame.duration))
                 triggered = False
 
@@ -154,14 +148,14 @@ def __write_wave(input_wave_file, audio, serial_num, sampling_rate=Settings.SAMP
     return save_path
 
 
-def execute(input_wave_file=None, callback=lambda *x: None):
-    frames = __frame_generator()
-    segment_collector = __vad_collector(frames)
-    for i, segment in enumerate(segment_collector):
-        chunk_wave_file = __write_wave(input_wave_file, segment[0], i)
-        logger.debug("chunk {} start: {}".format(i, segment[1][0]/1000))
-        logger.debug("chunk {} end: {}".format(i, segment[1][1]/1000))
-        callback(i, segment, chunk_wave_file, input_wave_file)
+def execute(input_stream=sys.stdin.buffer, input_wave_file=None, callback=lambda *x: None):
+    frames = __frame_generator(input_stream)
+    vad_segment_collector = __vad_segment_collector(frames)
+    for i, vad_segment in enumerate(vad_segment_collector):
+        chunk_wave_file = __write_wave(input_wave_file, vad_segment[0], i)
+        logger.debug("chunk {} start: {}".format(i, vad_segment[1][0]/1000))
+        logger.debug("chunk {} end: {}".format(i, vad_segment[1][1]/1000))
+        callback(i, vad_segment, chunk_wave_file, input_wave_file)
 
 
 if __name__ == '__main__':
