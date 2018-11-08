@@ -6,33 +6,47 @@ Based on py-webrtcvad/example.py
 https://github.com/wiseman/py-webrtcvad/blob/master/example.py
 """
 
+import os
 import sys
 import webrtcvad
 import collections
 import contextlib
 import wave
 
-import logging
-import logzero
 from logzero import logger
 
 import Settings
 from Frame import Frame
-
-logzero.loglevel(getattr(logging, Settings.LOG_LEVEL))
 
 
 def __frame_generator(input_stream):
     current_timestamp = 0.0
 
     while not input_stream.closed:
-        byte_data = input_stream.read(Settings.VAD_FRAME_SIZE_BYTE)
+        try:
+            byte_data = input_stream.read(Settings.VAD_FRAME_SIZE_BYTE)
+            current_timestamp += Settings.VAD_FRAME_DURATION_MS
+        except:
+            import traceback
+            logger.error(traceback.format_exc())
+
+        if byte_data is None:
+            continue
 
         frame = Frame(byte_data, current_timestamp,
                       Settings.VAD_FRAME_DURATION_MS)
         yield frame
 
-        current_timestamp += Settings.VAD_FRAME_DURATION_MS
+
+
+def __voiced_frame_bytes(voiced_frames):
+    return b''.join([f.bytes for f in voiced_frames])
+
+
+def __voiced_frame_range(voiced_frames):
+    start_timestamp = voiced_frames[0].timestamp
+    end_timestamp = voiced_frames[-1].timestamp
+    return (start_timestamp, end_timestamp + Settings.VAD_FRAME_DURATION_MS)
 
 
 def __vad_segment_collector(frames):
@@ -56,14 +70,6 @@ def __vad_segment_collector(frames):
 
     Returns: A generator that yields PCM audio data.
     """
-
-    def voiced_frame_bytes():
-        return b''.join([f.bytes for f in voiced_frames])
-
-    def voiced_frame_range():
-        start_timestamp = voiced_frames[0].timestamp
-        end_timestamp = voiced_frames[-1].timestamp
-        return (start_timestamp, end_timestamp + Settings.VAD_FRAME_DURATION_MS)
 
     vad = webrtcvad.Vad()
     vad.set_mode(Settings.VAD_MODE)
@@ -91,7 +97,7 @@ def __vad_segment_collector(frames):
             # TRIGGERED state.
             if num_voiced > Settings.VAD_VOICED_TRIGGER_RATE * ring_buffer.maxlen:
                 triggered = True
-                logger.info('+(%s)' % (ring_buffer[0][0].timestamp,))
+                logger.info('voiced: (%s)' % (ring_buffer[0][0].timestamp,))
 
                 # We want to yield all the audio we see from now until
                 # we are NOTTRIGGERED, but we have to start with the
@@ -111,58 +117,61 @@ def __vad_segment_collector(frames):
             # unvoiced, then enter NOTTRIGGERED and yield whatever
             # audio we've collected.
             if num_unvoiced > Settings.VAD_UNVOICED_TRIGGER_RATE * ring_buffer.maxlen:
-                logger.info('-(%s)' % (frame.timestamp + frame.duration))
+                logger.info('unvoiced: (%s)' % (frame.timestamp + frame.duration))
                 triggered = False
 
-                yield (voiced_frame_bytes(), voiced_frame_range())
+                yield (__voiced_frame_bytes(voiced_frames), __voiced_frame_range(voiced_frames))
 
                 ring_buffer.clear()
                 voiced_frames = []
 
     if triggered:
-        logger.info('-(%s)' % (frame.timestamp + frame.duration))
+        logger.info('unvoiced: (%s)' % (frame.timestamp + frame.duration))
 
     # If we have any leftover voiced audio when we run out of input,
     # yield it.
     if voiced_frames:
-        yield (voiced_frame_bytes(), voiced_frame_range())
+        yield (__voiced_frame_bytes(voiced_frames), __voiced_frame_range(voiced_frames))
 
 
-def __write_wave(input_wave_file, audio, serial_num, sampling_rate=Settings.SAMPLING_RATE):
+def __write_wave(audio, recording_wave_file, serial_num, sampling_rate=Settings.SAMPLING_RATE):
     """Writes a .wav file.
     Takes path, PCM audio data, and sample rate.
     """
 
-    # if not Settings.DEBUG_MODE:
-    #     return
-
-    save_path = "{}-{}.wav".format(input_wave_file, serial_num)
+    save_path = "{}-{}.wav".format(recording_wave_file, serial_num)
     with contextlib.closing(wave.open(save_path, 'wb')) as wave_file:
         # pylint: disable=E1101
         wave_file.setnchannels(1)
         wave_file.setsampwidth(2)
         wave_file.setframerate(sampling_rate)
         wave_file.writeframes(audio)
-
-    logger.debug("wrote {}".format(save_path))
+    logger.info(
+        "wrote chunk of recording wave file: {}".format(save_path))
     return save_path
 
 
-def execute(input_stream=sys.stdin.buffer, input_wave_file=None, callback=lambda *x: None):
+def execute(input_stream=sys.stdin.buffer,
+            recording_wave_file="{}/{}.wav".format(Settings.OUTPUT_DIR, Settings.START_DATETIME),
+            callback=None):
     frames = __frame_generator(input_stream)
+    # TODO: エセストリーミングじゃなく真面目にストリーミング変換するなら、サブプロセス作って適当なファイルディスクリプタに音声ストリーム垂れ流すようにする
     vad_segment_collector = __vad_segment_collector(frames)
     for i, vad_segment in enumerate(vad_segment_collector):
-        chunk_wave_file = __write_wave(input_wave_file, vad_segment[0], i)
-        logger.debug("chunk {} start: {}".format(i, vad_segment[1][0]/1000))
-        logger.debug("chunk {} end: {}".format(i, vad_segment[1][1]/1000))
-        callback(i, vad_segment, chunk_wave_file, input_wave_file)
+        try:
+            chunk_wave_file = __write_wave(vad_segment[0], recording_wave_file, i)
+            logger.debug("chunk {} start: {}".format(i, vad_segment[1][0]/1000))
+            logger.debug("chunk {} end: {}".format(i, vad_segment[1][1]/1000))
+            if callable(callback):
+                callback(i, vad_segment, chunk_wave_file, recording_wave_file)
+        except:
+            import traceback
+            logger.error(traceback.format_exc())
 
 
 if __name__ == '__main__':
     if (len(sys.argv) != 2):
-        print('Usage: python {} input_wave_file'.format(sys.argv[0]))
+        print('Usage: python {} recording_wave_file'.format(sys.argv[0]))
         quit()
 
-    input_wave_file = sys.argv[1]
-
-    execute(input_wave_file=input_wave_file)
+    execute(recording_wave_file=sys.argv[1])

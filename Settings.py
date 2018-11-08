@@ -1,12 +1,20 @@
 # coding: UTF-8
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
+
+now = datetime.now()
+START_DATETIME = now.strftime('%Y%m%d%H%M%S')
 
 LOG_LEVEL = os.getenv("LOG_LEVEL")
 DEBUG_MODE = int(os.getenv("DEBUG_MODE")) != 0
 
+SCRIPT_PATH = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = "{}/{}".format(SCRIPT_PATH, os.getenv("OUTPUT_DIR"))
+
 SAMPLING_RATE = int(os.getenv("SAMPLING_RATE"))
+SAMPLE_SIZE_BIT = int(os.getenv("SAMPLE_SIZE_BIT"))
 
 STT_STREAMING_CHUNK_DURATION_MS = int(
     os.getenv("STT_STREAMING_CHUNK_DURATION_MS"))

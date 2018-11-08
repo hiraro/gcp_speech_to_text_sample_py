@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # coding: UTF-8
 import io
+import os
 import sys
 import time
-import logging
-import logzero
+import itertools
 from logzero import logger
 
 from google.cloud import speech
@@ -13,36 +13,52 @@ from google.cloud.speech import types
 
 import Settings
 
-logzero.loglevel(getattr(logging, Settings.LOG_LEVEL))
 
-
-def execute(task_queue):
-    logger.debug("start: gcp_speech_to_text.execute")
-
+def execute(task_queue, callback=None):
     while True:
-        segment_info = task_queue.get()
-        logger.debug("dequeued: {} {}".format(
-            segment_info[0], segment_info[2]))
+        try:
+            logger.debug("waiting for queuing speech segment info...")
 
-        transcribe_streaming(segment_info[2])
+            segment_info = task_queue.get()
+
+            logger.debug("dequeued segment: {} {}".format(
+                segment_info[0], segment_info[2]))
+
+            transcribe_streaming(segment_info[2], callback)
+        except:
+            import traceback
+            logger.error(traceback.format_exc())
 
         time.sleep(1)
 
 
-def transcribe_streaming(stream_file):
+def __log_recognition_response_result_alternatives(alternatives):
+    for alternative in alternatives:
+        logger.debug('Confidence: {}'.format(alternative.confidence))
+        logger.info(u'Transcript: {}'.format(alternative.transcript))
+        for word_info in alternative.words:
+            word = word_info.word
+            start_time = word_info.start_time
+            end_time = word_info.end_time
+            logger.debug('Word: {}, start_time: {}, end_time: {}'.format(
+                word,
+                start_time.seconds + start_time.nanos * 1e-9,
+                end_time.seconds + end_time.nanos * 1e-9))
+
+
+def transcribe_streaming(stream_file=None, callback=None):
     """Streams transcription of the given audio file."""
     # pylint: disable=E1101
 
     logger.debug("start: gcp_speech_to_text.transcribe_streaming")
 
-    client = speech.SpeechClient()
-
+    # Create chunk list from audio file
     chunks = []
     with io.open(stream_file, 'rb') as audio_file:
         for chunk in iter(lambda: audio_file.read(Settings.STT_STREAMING_CHUNK_SIZE_BYTE), b""):
             chunks.append(chunk)
 
-    # In practice, stream should be a generator yielding chunks of audio data.
+    # Create Recognize API Requests from the chunks
     requests = (types.StreamingRecognizeRequest(audio_content=chunk)
                 for chunk in chunks)
 
@@ -58,34 +74,32 @@ def transcribe_streaming(stream_file):
         config=config)
 
     # streaming_recognize returns a generator.
-    responses = client.streaming_recognize(streaming_config, requests)
+    logger.debug("start: streaming_recognize()")
+
+    client = speech.SpeechClient()
+    responses = client.streaming_recognize(
+        streaming_config, requests, timeout=150)
+
+    logger.debug("end: streaming_recognize()")
 
     for response in responses:
-        # Once the transcription has settled, the first result will contain the
-        # is_final result. The other results will be for subsequent portions of
-        # the audio.
         for result in response.results:
-            logger.info('Finished: {}'.format(result.is_final))
-            logger.info('Stability: {}'.format(result.stability))
+            logger.debug('Finished: {}'.format(result.is_final))
+            logger.debug('Stability: {}'.format(result.stability))
 
-            alternatives = result.alternatives
-            # The alternatives are ordered from most likely to least.
-            for alternative in alternatives:
-                logger.info('Confidence: {}'.format(alternative.confidence))
-                logger.info(u'Transcript: {}'.format(alternative.transcript))
-                for word_info in alternative.words:
-                    word = word_info.word
-                    start_time = word_info.start_time
-                    end_time = word_info.end_time
-                    logger.info('Word: {}, start_time: {}, end_time: {}'.format(
-                        word,
-                        start_time.seconds + start_time.nanos * 1e-9,
-                        end_time.seconds + end_time.nanos * 1e-9))
+            alternatives = list(result.alternatives)
+
+            if callable(callable):
+                callback(alternatives)
+
+            __log_recognition_response_result_alternatives(alternatives)
+
+    logger.debug("end: gcp_speech_to_text.transcribe_streaming")
 
 
 if __name__ == '__main__':
     if (len(sys.argv) != 2):
-        print('Usage: python {} input_filename'.format(sys.argv[0]))
+        print('Usage: python {} recording_wave_file'.format(sys.argv[0]))
         quit()
 
     transcribe_streaming(sys.argv[1])
